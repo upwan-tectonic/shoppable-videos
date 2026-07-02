@@ -8,6 +8,7 @@ A generic, end-to-end Shopify app that lets merchants attach products to videos 
 
 - [Screenshots](#screenshots)
 - [Setup & Run](#setup--run)
+- [Verify It Works — Admin + Storefront](#verify-it-works--admin--storefront)
 - [Data Model](#data-model)
 - [Install / Uninstall Lifecycle](#install--uninstall-lifecycle)
 - [Scopes & Permissions](#scopes--permissions)
@@ -57,6 +58,43 @@ shopify app dev
 The app uses SQLite (via Prisma) for session storage. On first run, Prisma auto-migrates.
 
 **Environment variables:** for local development you do **not** need a `.env` — `shopify app dev` injects `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET`, `SCOPES`, and `SHOPIFY_APP_URL` automatically from your linked app and tunnel. For production/self-hosting (`npm run build && npm start`), copy `.env.example` to `.env` and fill it in. See [`.env.example`](.env.example).
+
+---
+
+## Verify It Works — Admin + Storefront
+
+The app has two surfaces: the **embedded admin** (where a merchant manages videos) and the **storefront block** (what shoppers see). Here's how to open and check each after `shopify app dev` is running.
+
+### A. The admin app
+
+With `shopify app dev` running, press **`p`** in that terminal (or open the printed **Preview URL**). It opens the app **embedded inside Shopify admin** → **Shoppable Videos → Videos**.
+
+1. **Add Video** → paste a hosted MP4 URL, give it a title.
+   *(A verified portrait test clip: `https://videos.pexels.com/video-files/7667423/7667423-uhd_2732_1440_25fps.mp4`)*
+2. **Tag products** → *Search catalog…* → pick one or more products. Each tag gets a timestamp (when the hotspot shows) and an on-screen position.
+3. Set **Status → Live**, then **Save**. (Setting Live with zero tags is blocked with a toast.)
+4. Copy the **Handle** shown in the *Embed on storefront* panel — you'll need it for the single-video block.
+
+### B. The storefront block
+
+The block doesn't appear on its own — it's placed once via the theme editor.
+
+1. Shopify admin → **Online Store → Themes → Customize**.
+2. On any page (Home is easiest): **Add section / Add block** → under **Apps**, pick one of:
+   - **Shoppable Video Player** — one video; paste the **handle** from step A4 into the block settings.
+   - **Shoppable Video Feed** — a vertical, TikTok-style feed that auto-renders **every Live video** (no handle needed).
+3. **Save**, then **View your store**.
+4. On the storefront: the video autoplays muted; tap a numbered **hotspot** → the product card shows → pick a **variant** → **Add to cart**. A confirmation toast fires and the cart count increments — no page reload.
+
+### Quick reference
+
+| What | Where |
+|---|---|
+| Admin app | `shopify app dev` terminal → press `p` (embeds in Shopify admin) |
+| Storefront | Dev store → **Online Store → Themes → Customize** → add a *Shoppable Video* block → **View store** |
+| Restart dev server | `npm run dev` (alias for `shopify app dev`) |
+
+> See the [Screenshots](#screenshots) above for what each surface looks like.
 
 ---
 
