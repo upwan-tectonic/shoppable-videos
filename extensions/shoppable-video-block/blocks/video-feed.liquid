@@ -1,0 +1,76 @@
+{% comment %}
+  Shoppable Video Feed — vertical, TikTok-style.
+  Auto-renders every LIVE shoppable video in a full-height, snap-scrolling feed.
+  Each slide is the shared shoppable-video-item (video + hotspots + product rail with
+  variant selectors). Needs no handle. Degrades to nothing on the live storefront when
+  there are no live videos.
+{% endcomment %}
+
+{%- assign all_videos = shop.metaobjects["$app:shoppable_video"].values -%}
+{%- assign feed_height = block.settings.feed_height | default: 80 -%}
+{%- assign feed_width = block.settings.max_width | default: 500 -%}
+
+{%- assign live_count = 0 -%}
+{%- for v in all_videos -%}
+  {%- if v.status.value == "live" -%}{%- assign live_count = live_count | plus: 1 -%}{%- endif -%}
+{%- endfor -%}
+
+{%- if live_count == 0 -%}
+  {%- if request.design_mode -%}
+    <div style="padding:40px;text-align:center;background:#f6f6f7;border-radius:12px;color:#6d7175;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+      <p style="font-size:18px;font-weight:600;">Shoppable Video Feed</p>
+      <p>No live videos yet. Create videos and set them Live in the Shoppable Videos app — they'll appear here automatically.</p>
+    </div>
+  {%- endif -%}
+{%- else -%}
+  {% render 'shoppable-video-core' %}
+
+  <div
+    class="sv-feed"
+    data-sv-height="{{ feed_height }}"
+    style="height:{{ feed_height }}vh;max-width:{{ feed_width }}px;margin:0 auto;overflow-y:scroll;scroll-snap-type:y mandatory;border-radius:12px;background:#000;--sv-width:{{ feed_width }}px;"
+  >
+    {%- assign slide_index = 0 -%}
+    {%- for video in all_videos -%}
+      {%- if video.status.value != "live" -%}{%- continue -%}{%- endif -%}
+      {%- assign slide_index = slide_index | plus: 1 -%}
+      {%- assign item_uid = block.id | append: "-" | append: slide_index -%}
+      <div class="sv-feed-slide" style="height:100%;scroll-snap-align:start;scroll-snap-stop:always;">
+        {% render 'shoppable-video-item', video: video, uid: item_uid, mode: 'feed' %}
+      </div>
+    {%- endfor -%}
+  </div>
+{%- endif -%}
+
+{% schema %}
+{
+  "name": "Shoppable Video Feed",
+  "target": "section",
+  "settings": [
+    {
+      "type": "paragraph",
+      "content": "Automatically shows every video set to Live in the Shoppable Videos app, as a vertical swipe feed. No handle needed."
+    },
+    {
+      "type": "range",
+      "id": "feed_height",
+      "label": "Feed height",
+      "min": 50,
+      "max": 100,
+      "step": 5,
+      "unit": "vh",
+      "default": 80
+    },
+    {
+      "type": "range",
+      "id": "max_width",
+      "label": "Feed width",
+      "min": 280,
+      "max": 900,
+      "step": 20,
+      "unit": "px",
+      "default": 500
+    }
+  ]
+}
+{% endschema %}

@@ -1,0 +1,303 @@
+{%- comment -%}
+  Shared styles + behaviour for the shoppable video blocks.
+  Rendered ONCE per block (not per video). The script scans the whole page for
+  [data-sv-item] containers and wires each one up, so it serves both the single
+  Player block and the vertical Feed block. Guarded to initialise only once.
+{%- endcomment -%}
+
+<style>
+  .sv-item { position: relative; background: #000; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+  .sv-item[data-sv-mode="player"] { width: 100%; border-radius: 12px; overflow: hidden; }
+  .sv-item[data-sv-mode="feed"] { height: 100%; }
+
+  .sv-stage { position: relative; width: 100%; height: 100%; }
+  .sv-video { width: 100%; display: block; background: #000; }
+  .sv-item[data-sv-mode="player"] .sv-video { max-height: 85vh; object-fit: contain; }
+  .sv-item[data-sv-mode="feed"] .sv-video { height: 100%; object-fit: cover; cursor: pointer; }
+
+  .sv-mute { position: absolute; top: 12px; right: 12px; z-index: 9; width: 38px; height: 38px; border-radius: 50%; border: none; background: rgba(0,0,0,.5); color: #fff; font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+
+  .sv-hotspots { position: absolute; inset: 0; pointer-events: none; }
+  .sv-hotspot { position: absolute; transform: translate(-50%,-50%); width: 30px; height: 30px; border-radius: 50%; background: rgba(255,255,255,.95); border: 2px solid #000; color: #000; font-weight: 700; font-size: 13px; cursor: pointer; pointer-events: auto; z-index: 6; display: flex; align-items: center; justify-content: center; animation: svHotspotPulse 2s infinite; }
+  .sv-hotspot:hover { transform: translate(-50%,-50%) scale(1.15); }
+  @keyframes svHotspotPulse { 0% { box-shadow: 0 0 0 0 rgba(255,255,255,.6); } 70% { box-shadow: 0 0 0 10px rgba(255,255,255,0); } 100% { box-shadow: 0 0 0 0 rgba(255,255,255,0); } }
+
+  .sv-rail { position: absolute; left: 0; right: 0; bottom: 12px; display: flex; gap: 10px; overflow-x: auto; padding: 14px 12px 12px; scroll-snap-type: x mandatory; scroll-padding-left: 12px; scrollbar-width: none; z-index: 8; }
+  .sv-rail::-webkit-scrollbar { display: none; }
+  .sv-rail:empty { display: none; }
+
+  /* One card fills the width, the next peeks in (snap-scroll). */
+  .sv-card { scroll-snap-align: start; flex: 0 0 88%; box-sizing: border-box; background: rgba(255,255,255,.97); border-radius: 14px; padding: 10px; display: flex; gap: 10px; align-items: flex-start; box-shadow: 0 6px 20px rgba(0,0,0,.28); position: relative; transition: transform .2s ease, box-shadow .2s ease, outline-color .2s ease; outline: 2px solid transparent; }
+  .sv-card--active { transform: translateY(-4px); box-shadow: 0 10px 28px rgba(0,0,0,.45); outline-color: #000; }
+  .sv-card-badge { position: absolute; top: -8px; left: -8px; width: 22px; height: 22px; border-radius: 50%; background: #000; color: #fff; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+  .sv-card-img { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; flex-shrink: 0; }
+  .sv-card-img--empty { background: #eee; display: inline-block; }
+  .sv-card-body { flex: 1; min-width: 0; }
+  .sv-card-title { font-size: 13px; font-weight: 600; color: #111; margin: 0 0 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sv-card-price { font-size: 13px; color: #444; margin: 0 0 6px; }
+  .sv-card-options { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+  .sv-card-options:empty { display: none; }
+  .sv-option { font-size: 12px; padding: 4px 6px; border: 1px solid #ccc; border-radius: 6px; max-width: 100%; background: #fff; color: #111; }
+  .sv-option--single { display: none; }
+  .sv-card-atc { width: 100%; padding: 7px 10px; background: #000; color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .sv-card-atc:hover:not(:disabled) { background: #333; }
+  .sv-card-atc:disabled { background: #bbb; cursor: not-allowed; }
+
+  .sv-feed { scrollbar-width: none; }
+  .sv-feed::-webkit-scrollbar { display: none; }
+  .sv-feed-slide { position: relative; }
+
+</style>
+
+<script defer>
+  (function () {
+    if (window.__shoppableVideoInit) return;
+    window.__shoppableVideoInit = true;
+
+    // ── Add to cart (shared) ─────────────────────────────────────────────────
+    function addToCart(variantId, btn) {
+      btn.disabled = true;
+      btn.textContent = 'Adding…';
+      fetch('/cart/add.js', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: [{ id: parseInt(variantId, 10), quantity: 1 }] })
+      })
+        .then(function (r) { if (!r.ok) throw new Error('add failed'); return r.json(); })
+        .then(function () {
+          refreshCart();
+          btn.textContent = '✓ Added!';
+          setTimeout(function () { btn.textContent = 'Add to cart'; btn.disabled = false; }, 1800);
+        })
+        .catch(function () { btn.textContent = 'Error'; btn.disabled = false; });
+    }
+
+    // The item is added server-side immediately; notify the theme + show our own
+    // toast (source of truth from /cart.js) since some themes (e.g. Horizon) don't
+    // expose cart sections to apps.
+    function refreshCart() {
+      document.dispatchEvent(new CustomEvent('cart:refresh', { bubbles: true }));
+      document.dispatchEvent(new CustomEvent('cart:updated', { bubbles: true }));
+      fetch('/cart.js', { headers: { Accept: 'application/json' } })
+        .then(function (r) { return r.json(); })
+        .then(function (cart) {
+          var n = cart.item_count;
+          document.querySelectorAll('.cart-count-bubble').forEach(function (b) {
+            var vis = b.querySelector('span[aria-hidden="true"]');
+            if (vis) vis.textContent = n; else if (b.children.length === 0) b.textContent = n;
+          });
+          ['[data-cart-count]', '#CartCount', '.cart-link__bubble', '.site-header__cart-count', '.header__cart-count', '.cart-count'].forEach(function (sel) {
+            document.querySelectorAll(sel).forEach(function (el) { if (el.children.length === 0) el.textContent = n; });
+          });
+          showToast(n);
+        })
+        .catch(function () {});
+    }
+
+    function showToast(count) {
+      var t = document.getElementById('sv-cart-toast');
+      if (!t) {
+        t = document.createElement('div');
+        t.id = 'sv-cart-toast';
+        t.style.cssText = 'position:fixed;top:84px;left:50%;transform:translateX(-50%);background:#000;color:#fff;padding:12px 18px;border-radius:999px;font:14px/1.2 -apple-system,BlinkMacSystemFont,sans-serif;z-index:2147483600;box-shadow:0 8px 24px rgba(0,0,0,.35);opacity:0;transition:opacity .2s ease;';
+        document.body.appendChild(t);
+      }
+      t.innerHTML = '✓ Added · ' + count + ' in cart <a href="/cart" style="color:#fff;text-decoration:underline;font-weight:600;margin-left:8px;">View cart</a>';
+      requestAnimationFrame(function () { t.style.opacity = '1'; });
+      clearTimeout(window.__svToast);
+      window.__svToast = setTimeout(function () { t.style.opacity = '0'; }, 3500);
+    }
+
+    // ── Initialise one video item ────────────────────────────────────────────
+    function initItem(item) {
+      if (item.__svReady) return;
+      item.__svReady = true;
+
+      var mode = item.getAttribute('data-sv-mode');
+      var video = item.querySelector('.sv-video');
+      var hotspots = item.querySelector('.sv-hotspots');
+      var rail = item.querySelector('.sv-rail');
+      var cards = Array.prototype.slice.call(item.querySelectorAll('.sv-card'));
+      if (!video || !cards.length) return;
+
+      var products = cards.map(function (card) {
+        var data = {};
+        try { data = JSON.parse(card.querySelector('.sv-card-data').textContent); } catch (e) { data = { variants: [] }; }
+        return { card: card, data: data };
+      });
+
+      // Variant selection per card
+      products.forEach(function (p) {
+        var card = p.card, variants = p.data.variants || [];
+        var selects = Array.prototype.slice.call(card.querySelectorAll('.sv-option'));
+        var priceEl = card.querySelector('[data-sv-price]');
+        var atc = card.querySelector('.sv-card-atc');
+
+        function currentVariant() {
+          if (!selects.length) return variants[0];
+          var chosen = selects.map(function (s) { return s.value; });
+          return variants.find(function (v) {
+            return v.options && v.options.length === chosen.length &&
+              v.options.every(function (o, i) { return o === chosen[i]; });
+          });
+        }
+        function sync() {
+          var v = currentVariant();
+          if (v && v.available) {
+            priceEl.textContent = v.price;
+            atc.disabled = false; atc.textContent = 'Add to cart';
+            atc.setAttribute('data-variant-id', v.id);
+          } else if (v) {
+            priceEl.textContent = v.price;
+            atc.disabled = true; atc.textContent = 'Sold out';
+            atc.removeAttribute('data-variant-id');
+          } else {
+            atc.disabled = true; atc.textContent = 'Unavailable';
+            atc.removeAttribute('data-variant-id');
+          }
+        }
+        selects.forEach(function (s) { s.addEventListener('change', sync); });
+
+        // Pre-select the first available variant.
+        var firstAvail = variants.find(function (v) { return v.available; }) || variants[0];
+        if (firstAvail && selects.length && firstAvail.options) {
+          firstAvail.options.forEach(function (val, i) { if (selects[i]) selects[i].value = val; });
+        }
+        sync();
+
+        atc.addEventListener('click', function () {
+          var id = atc.getAttribute('data-variant-id');
+          if (id) addToCart(id, atc);
+        });
+      });
+
+      // Give each hotspot a display position. Products that share the same authored
+      // position (e.g. all left at the 50%/50% default) are scattered across the frame
+      // (varied X and Y, deterministic so it's stable across reloads) so markers never
+      // stack or align in a line. Positions the merchant set distinctly are respected.
+      var SCATTER = [
+        { x: 32, y: 36 }, { x: 66, y: 30 }, { x: 47, y: 60 }, { x: 74, y: 52 },
+        { x: 25, y: 64 }, { x: 57, y: 43 }, { x: 39, y: 24 }, { x: 70, y: 70 }
+      ];
+      products.forEach(function (p) { p.dx = p.data.positionX; p.dy = p.data.positionY; });
+      var posGroups = {};
+      products.forEach(function (p, i) {
+        var key = Math.round(p.data.positionX / 6) * 6 + ',' + Math.round(p.data.positionY / 6) * 6;
+        (posGroups[key] = posGroups[key] || []).push({ p: p, i: i });
+      });
+      Object.keys(posGroups).forEach(function (key) {
+        var g = posGroups[key];
+        if (g.length < 2) return; // only scatter markers that would otherwise overlap
+        g.forEach(function (o) {
+          var s = SCATTER[o.i % SCATTER.length];
+          o.p.dx = s.x;
+          o.p.dy = s.y;
+        });
+      });
+
+      // Tap a hotspot → scroll the rail to that product's card + highlight it.
+      function focusCard(i) {
+        var p = products[i];
+        if (!p) return;
+        var card = p.card;
+        var left = card.offsetLeft - (rail.clientWidth - card.clientWidth) / 2;
+        rail.scrollTo({ left: Math.max(0, left), behavior: 'smooth' });
+        cards.forEach(function (c) { c.classList.remove('sv-card--active'); });
+        card.classList.add('sv-card--active');
+        clearTimeout(card.__hl);
+        card.__hl = setTimeout(function () { card.classList.remove('sv-card--active'); }, 2600);
+      }
+
+      // Hotspots stay visible for the whole video so shoppers can always tap a product.
+      // (The tag's timestamp is still stored and could gate visibility if ever wanted.)
+      var hotspotEls = {};
+      function updateHotspots() {
+        products.forEach(function (p, i) {
+          var show = true;
+          var ex = hotspotEls[i];
+          if (show && !ex) {
+            var h = document.createElement('button');
+            h.type = 'button';
+            h.className = 'sv-hotspot';
+            h.style.left = p.dx + '%';
+            h.style.top = p.dy + '%';
+            h.textContent = (i + 1);
+            h.setAttribute('aria-label', 'Show product ' + (i + 1) + ': ' + p.data.title);
+            h.addEventListener('click', function (e) { e.stopPropagation(); focusCard(i); });
+            hotspots.appendChild(h);
+            hotspotEls[i] = h;
+          } else if (!show && ex) {
+            ex.remove();
+            delete hotspotEls[i];
+          }
+        });
+      }
+      video.addEventListener('timeupdate', updateHotspots);
+      video.addEventListener('seeked', updateHotspots);
+      updateHotspots();
+
+      // Feed-only: tap to play/pause + mute toggle.
+      if (mode === 'feed') {
+        video.addEventListener('click', function () {
+          if (video.paused) video.play().catch(function () {}); else video.pause();
+        });
+        var mute = item.querySelector('.sv-mute');
+        if (mute) {
+          mute.addEventListener('click', function (e) {
+            e.stopPropagation();
+            video.muted = !video.muted;
+            mute.textContent = video.muted ? '🔇' : '🔊';
+          });
+        }
+      }
+    }
+
+    // Feed: autoplay the in-view slide (muted), pause the rest. Root is the feed
+    // scroll container so internal snap-scrolling is detected correctly.
+    function setupFeeds() {
+      if (!('IntersectionObserver' in window)) return;
+      document.querySelectorAll('.sv-feed').forEach(function (feed) {
+        if (feed.__svIO) return;
+        feed.__svIO = true;
+        var io = new IntersectionObserver(function (entries) {
+          entries.forEach(function (en) {
+            var v = en.target.querySelector('.sv-video');
+            if (!v) return;
+            if (en.isIntersecting && en.intersectionRatio >= 0.6) { v.muted = true; v.play().catch(function () {}); }
+            else { v.pause(); }
+          });
+        }, { root: feed, threshold: [0, 0.6, 1] });
+        feed.querySelectorAll('.sv-item[data-sv-mode="feed"]').forEach(function (it) { io.observe(it); });
+      });
+    }
+
+    // Size each feed to exactly fill the viewport space below wherever it sits
+    // (accounts for the theme header, so the product rail is never cut off).
+    function sizeFeeds() {
+      document.querySelectorAll('.sv-feed').forEach(function (feed) {
+        var top = feed.getBoundingClientRect().top;
+        var available = window.innerHeight - top - 8;
+        var desired = (parseFloat(feed.getAttribute('data-sv-height')) || 80) / 100 * window.innerHeight;
+        var h = Math.max(360, Math.min(desired, available));
+        feed.style.height = h + 'px';
+      });
+    }
+
+    function initAll() {
+      sizeFeeds();
+      document.querySelectorAll('[data-sv-item]').forEach(initItem);
+      setupFeeds();
+    }
+
+    var resizeT;
+    window.addEventListener('resize', function () {
+      clearTimeout(resizeT);
+      resizeT = setTimeout(sizeFeeds, 150);
+    });
+
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initAll);
+    else initAll();
+    // Re-init when a section is re-rendered in the theme editor.
+    document.addEventListener('shopify:section:load', initAll);
+  })();
+</script>

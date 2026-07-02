@@ -1,0 +1,103 @@
+{%- comment -%}
+  Renders ONE shoppable video: the media, numbered hotspots, and an always-visible,
+  horizontally-scrolling product rail with per-product variant selectors.
+
+  Params (passed via {% render %}):
+    video : a $app:shoppable_video metaobject
+    uid   : unique id suffix (e.g. "<block.id>-<index>")
+    mode  : "feed"  → muted autoplay, tap play/pause, no native controls
+            "player"→ native <video controls>
+
+  Product + variant data is resolved LIVE from the catalog (all_products) and
+  emitted as JSON per card, so hotspots and rail cards stay index-aligned.
+  Nothing about the product is stored by the app — only read at render time.
+{%- endcomment -%}
+
+{%- assign tags = video.tags.value -%}
+
+<div class="sv-item" data-sv-item data-sv-mode="{{ mode | default: 'player' }}" data-sv-uid="{{ uid }}">
+  <div class="sv-stage">
+    <video
+      class="sv-video"
+      src="{{ video.video_url.value }}"
+      playsinline
+      preload="metadata"
+      {% if mode == 'feed' %}muted loop{% else %}controls{% endif %}
+    >
+      Your browser does not support the video element.
+    </video>
+
+    {% if mode == 'feed' %}
+      <button class="sv-mute" type="button" aria-label="Toggle sound" data-muted="true">🔇</button>
+    {% endif %}
+
+    <div class="sv-hotspots"></div>
+  </div>
+
+  {%- comment -%} ── Always-visible product rail ────────────────────────────── {%- endcomment -%}
+  <div class="sv-rail" role="list" aria-label="Products in this video">
+    {%- assign card_index = 0 -%}
+    {%- for tag in tags -%}
+      {%- assign product = all_products[tag.productHandle] -%}
+      {%- if product == blank -%}{%- continue -%}{%- endif -%}
+
+      <div class="sv-card" role="listitem" data-product-index="{{ card_index }}" tabindex="0">
+        <span class="sv-card-badge">{{ card_index | plus: 1 }}</span>
+        {%- if product.featured_image -%}
+          <img class="sv-card-img" src="{{ product.featured_image | image_url: width: 160 }}" alt="{{ product.title | escape }}" width="56" height="56" loading="lazy" />
+        {%- else -%}
+          <span class="sv-card-img sv-card-img--empty" aria-hidden="true"></span>
+        {%- endif -%}
+
+        <div class="sv-card-body">
+          <p class="sv-card-title">{{ product.title | escape }}</p>
+          <p class="sv-card-price" data-sv-price>{{ product.price | money }}</p>
+
+          {%- unless product.has_only_default_variant -%}
+            <div class="sv-card-options">
+              {%- for opt in product.options_with_values -%}
+                {%- comment -%} Single-value options (e.g. the default "Title" option) carry no real
+                  choice — render them hidden so variant matching by index still works, but the shopper
+                  only sees dropdowns that actually matter. {%- endcomment -%}
+                <select
+                  class="sv-option{% if opt.values.size <= 1 %} sv-option--single{% endif %}"
+                  data-option-index="{{ forloop.index0 }}"
+                  aria-label="{{ opt.name | escape }}"
+                >
+                  {%- for val in opt.values -%}
+                    <option value="{{ val | escape }}">{{ val | escape }}</option>
+                  {%- endfor -%}
+                </select>
+              {%- endfor -%}
+            </div>
+          {%- endunless -%}
+
+          <button class="sv-card-atc" type="button" data-variant-id="">Add to cart</button>
+        </div>
+
+        <script type="application/json" class="sv-card-data">
+          {
+            "handle": {{ product.handle | json }},
+            "title": {{ product.title | json }},
+            "timestamp": {{ tag.timestamp | default: 0 | json }},
+            "positionX": {{ tag.positionX | default: 50 | json }},
+            "positionY": {{ tag.positionY | default: 50 | json }},
+            "variants": [
+              {%- for v in product.variants -%}
+                {
+                  "id": {{ v.id | json }},
+                  "title": {{ v.title | json }},
+                  "price": {{ v.price | money | json }},
+                  "available": {{ v.available | json }},
+                  "options": {{ v.options | json }}
+                }{% unless forloop.last %},{% endunless %}
+              {%- endfor -%}
+            ]
+          }
+        </script>
+      </div>
+
+      {%- assign card_index = card_index | plus: 1 -%}
+    {%- endfor -%}
+  </div>
+</div>

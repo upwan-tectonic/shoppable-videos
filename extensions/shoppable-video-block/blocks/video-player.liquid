@@ -1,0 +1,86 @@
+{% comment %}
+  Shoppable Video Player — renders ONE shoppable video, selected by handle.
+  Uses the shared shoppable-video-item (video + hotspots + product rail with variant
+  selectors). Degrades gracefully: shows helper notes in the theme editor when the
+  handle is blank / not found / not live, and renders nothing on the live storefront.
+{% endcomment %}
+
+{%- assign video_handle = block.settings.video_handle -%}
+{%- assign player_width = block.settings.max_width | default: 500 -%}
+{%- assign player_align = block.settings.alignment | default: 'center' -%}
+{%- if player_align == 'left' -%}
+  {%- assign player_margin = '0 auto 0 0' -%}
+{%- elsif player_align == 'right' -%}
+  {%- assign player_margin = '0 0 0 auto' -%}
+{%- else -%}
+  {%- assign player_margin = '0 auto' -%}
+{%- endif -%}
+
+{%- if video_handle == blank -%}
+  {%- if request.design_mode -%}
+    <div style="padding:40px;text-align:center;background:#f6f6f7;border-radius:12px;color:#6d7175;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+      <p style="font-size:18px;font-weight:600;">Shoppable Video Player</p>
+      <p>Enter a video handle in the block settings to display. Find it in the Shoppable Videos app.</p>
+    </div>
+  {%- endif -%}
+{%- else -%}
+  {%- assign video_obj = shop.metaobjects["$app:shoppable_video"][video_handle] -%}
+
+  {%- if video_obj == blank -%}
+    {%- if request.design_mode -%}
+      <div style="padding:40px;text-align:center;background:#fdf0f0;border-radius:12px;color:#d72c0d;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+        <p style="font-size:18px;font-weight:600;">Video not found</p>
+        <p>The handle "{{ video_handle }}" does not match any shoppable video. It may have been deleted.</p>
+      </div>
+    {%- endif -%}
+  {%- elsif video_obj.status.value != "live" -%}
+    {%- if request.design_mode -%}
+      <div style="padding:40px;text-align:center;background:#fff8e5;border-radius:12px;color:#916a00;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+        <p style="font-size:18px;font-weight:600;">Video is in Draft</p>
+        <p>"{{ video_obj.title.value }}" is not published yet. Set it to Live in the app admin.</p>
+      </div>
+    {%- endif -%}
+  {%- else -%}
+    {% render 'shoppable-video-core' %}
+    <div style="max-width:{{ player_width }}px;margin:{{ player_margin }};--sv-width:{{ player_width }}px;">
+      {% render 'shoppable-video-item', video: video_obj, uid: block.id, mode: 'player' %}
+    </div>
+  {%- endif -%}
+{%- endif -%}
+
+{% schema %}
+{
+  "name": "Shoppable Video Player",
+  "target": "section",
+  "settings": [
+    {
+      "type": "text",
+      "id": "video_handle",
+      "label": "Video handle",
+      "info": "Enter the handle of the shoppable video to display. Find it in the Shoppable Videos app."
+    },
+    {
+      "type": "range",
+      "id": "max_width",
+      "label": "Player width",
+      "min": 280,
+      "max": 1200,
+      "step": 20,
+      "unit": "px",
+      "default": 500,
+      "info": "Portrait/phone-style videos look best around 400–560px."
+    },
+    {
+      "type": "select",
+      "id": "alignment",
+      "label": "Alignment",
+      "options": [
+        { "value": "left", "label": "Left" },
+        { "value": "center", "label": "Center" },
+        { "value": "right", "label": "Right" }
+      ],
+      "default": "center"
+    }
+  ]
+}
+{% endschema %}

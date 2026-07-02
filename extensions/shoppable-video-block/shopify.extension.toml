@@ -1,0 +1,10 @@
+api_version = "2026-07"
+
+[[extensions]]
+type = "theme"
+name = "Shoppable Video Player"
+handle = "shoppable-video-block"
+uid = "92e19a24-638b-8d50-2744-03272d36f328d6595542"
+
+  [extensions.capabilities]
+  block_app_blocks = true
