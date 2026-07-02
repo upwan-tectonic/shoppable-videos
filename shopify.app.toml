@@ -1,0 +1,83 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "12c46884dcfd6b4770e1a8c1a3c34f6f"
+name = "Shoppable Videos"
+application_url = "https://example.com"
+embedded = true
+
+[access_scopes]
+# Least-privilege. Only two scopes are actually exercised:
+#   read_products    – catalog search in the editor + product reads in the products/* webhooks
+#   write_metaobjects – create/update/delete the shoppable-video entries
+# The metaobject *definition* is declared declaratively below (managed via app config, not the
+# Admin API), so no write_metaobject_definitions scope is needed. Video hosting is paste-a-URL
+# (no Files API), so read_files/write_files are intentionally omitted. See README §Scopes.
+scopes = "read_products,write_metaobjects"
+
+# ─── Metaobject: Shoppable Video ─────────────────────────────────────────────
+# This is the core data entity. Each metaobject represents one shoppable video.
+# App-owned ($app namespace) ensures shop-scoped isolation and auto-cleanup on uninstall.
+[metaobjects.app.shoppable_video]
+name = "Shoppable Video"
+description = "A video with tagged products for shoppable storefront experiences"
+
+  [metaobjects.app.shoppable_video.access]
+  admin = "merchant_read_write"
+  storefront = "public_read"
+
+[metaobjects.app.shoppable_video.fields.title]
+name = "Title"
+type = "single_line_text_field"
+required = true
+
+[metaobjects.app.shoppable_video.fields.video_url]
+name = "Video URL"
+type = "single_line_text_field"
+required = true
+
+[metaobjects.app.shoppable_video.fields.status]
+name = "Status"
+type = "single_line_text_field"
+required = true
+validations.choices = ["draft", "live"]
+
+[metaobjects.app.shoppable_video.fields.tags]
+name = "Product Tags"
+type = "json"
+description = "JSON array of product tag objects: [{productId, productHandle, title, timestamp, positionX, positionY}]"
+
+# ─── Webhooks ─────────────────────────────────────────────────────────────────
+[webhooks]
+api_version = "2026-07"
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/uninstalled"
+  topics = [ "app/uninstalled" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/scopes_update"
+  topics = [ "app/scopes_update" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/products/delete"
+  topics = [ "products/delete" ]
+
+  # Heal denormalized product data (handle/title) in tags when a product changes.
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/products/update"
+  topics = [ "products/update" ]
+
+  # Mandatory GDPR/privacy compliance webhooks.
+  # These are declared in a dedicated block (NOT as topic subscriptions) so the
+  # platform routes the compliance topics to our handlers.
+  [webhooks.privacy_compliance]
+  customer_data_request_url = "/webhooks/customers/data_request"
+  customer_deletion_url = "/webhooks/customers/redact"
+  shop_deletion_url = "/webhooks/shop/redact"
+
+[auth]
+redirect_urls = [ "https://example.com/api/auth" ]
+
+[build]
+include_config_on_deploy = true
+automatically_update_urls_on_dev = true
