@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import type {
   ActionFunctionArgs,
   HeadersFunction,
@@ -171,6 +171,54 @@ export default function VideoEditor() {
   const [tagPositionX, setTagPositionX] = useState("50");
   const [tagPositionY, setTagPositionY] = useState("50");
 
+  // Visual hotspot placement state
+  const [activeTagIndex, setActiveTagIndex] = useState<number | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const dragIndex = useRef<number | null>(null);
+
+  // Drag a numbered marker to set its product's on-screen position (0–100 %).
+  const startDrag = useCallback(
+    (index: number) => (e: React.PointerEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setActiveTagIndex(index);
+      dragIndex.current = index;
+
+      const move = (ev: PointerEvent) => {
+        const stage = stageRef.current;
+        if (stage == null || dragIndex.current == null) return;
+        const rect = stage.getBoundingClientRect();
+        const x = Math.max(0, Math.min(100, ((ev.clientX - rect.left) / rect.width) * 100));
+        const y = Math.max(0, Math.min(100, ((ev.clientY - rect.top) / rect.height) * 100));
+        setTags((prev) =>
+          prev.map((t, i) =>
+            i === dragIndex.current
+              ? { ...t, positionX: Math.round(x), positionY: Math.round(y) }
+              : t
+          )
+        );
+      };
+      const up = () => {
+        dragIndex.current = null;
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+    },
+    []
+  );
+
+  // Capture the video's current playback time as a tag's hotspot timestamp.
+  const setTimestampToCurrentFrame = useCallback((index: number) => {
+    const v = videoRef.current;
+    if (!v) return;
+    const t = Math.max(0, Math.floor(v.currentTime));
+    setTags((prev) => prev.map((tag, i) => (i === index ? { ...tag, timestamp: t } : tag)));
+    setActiveTagIndex(index);
+  }, []);
+
   const isLoading =
     ["loading", "submitting"].includes(fetcher.state) &&
     fetcher.formMethod === "POST";
@@ -217,7 +265,12 @@ export default function VideoEditor() {
             positionY: 50,
           }));
 
-        setTags((prev) => [...prev, ...newTags]);
+        setTags((prev) => {
+          const next = [...prev, ...newTags];
+          // Select the first newly-added product so its marker is highlighted.
+          if (newTags.length > 0) setActiveTagIndex(prev.length);
+          return next;
+        });
       }
     } catch (e) {
       // User cancelled the picker
@@ -344,11 +397,67 @@ export default function VideoEditor() {
 
           {videoUrl && (
             <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-              <video
-                src={videoUrl}
-                controls
-                style={{ width: "100%", maxHeight: "360px", borderRadius: "8px" }}
-              />
+              <div
+                ref={stageRef}
+                style={{
+                  position: "relative",
+                  width: "100%",
+                  maxWidth: "360px",
+                  margin: "0 auto",
+                  borderRadius: "8px",
+                  overflow: "hidden",
+                  lineHeight: 0,
+                }}
+              >
+                <video
+                  ref={videoRef}
+                  src={videoUrl}
+                  controls
+                  playsInline
+                  style={{ width: "100%", display: "block", borderRadius: "8px" }}
+                />
+                {/* Overlay: numbered, draggable hotspot markers */}
+                <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
+                  {tags.map((tag, index) => (
+                    <button
+                      key={`marker-${tag.productId}-${index}`}
+                      type="button"
+                      title={`${tag.title} — drag to position`}
+                      onPointerDown={startDrag(index)}
+                      onClick={() => setActiveTagIndex(index)}
+                      style={{
+                        position: "absolute",
+                        left: `${tag.positionX}%`,
+                        top: `${tag.positionY}%`,
+                        transform: "translate(-50%, -50%)",
+                        pointerEvents: "auto",
+                        width: "28px",
+                        height: "28px",
+                        borderRadius: "50%",
+                        border:
+                          activeTagIndex === index
+                            ? "2px solid #fff"
+                            : "2px solid rgba(255,255,255,.9)",
+                        background: activeTagIndex === index ? "#008060" : "rgba(0,0,0,.65)",
+                        color: "#fff",
+                        font: "700 13px/1 -apple-system, sans-serif",
+                        cursor: "grab",
+                        touchAction: "none",
+                        boxShadow: "0 1px 4px rgba(0,0,0,.4)",
+                        padding: 0,
+                      }}
+                    >
+                      {index + 1}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {tags.length > 0 && (
+                <s-text variant="bodySm" tone="subdued">
+                  Drag a numbered dot onto its product in the frame. Scrub the video
+                  and use “Set to current frame” on a product below to time its hotspot.
+                </s-text>
+              )}
             </s-box>
           )}
 
@@ -362,8 +471,10 @@ export default function VideoEditor() {
       <s-section heading="Tag products">
         <s-stack direction="block" gap="base">
           <s-paragraph>
-            Search your catalog and attach products. For each tag you can set
-            the timestamp (when the hotspot appears) and position (where).
+            Search your catalog and attach products. Then <strong>drag each numbered
+            dot</strong> on the video above to place its hotspot, and use{" "}
+            <strong>“Set to current frame”</strong> to time when it appears. Prefer
+            typing exact values? Use “Edit values”.
           </s-paragraph>
 
           <s-button onClick={handleAddProduct}>
@@ -384,14 +495,40 @@ export default function VideoEditor() {
               padding="base"
               borderWidth="base"
               borderRadius="base"
+              background={activeTagIndex === index ? "subdued" : undefined}
+              onClick={() => setActiveTagIndex(index)}
             >
               <s-stack direction="inline" gap="base" align="center" wrap={false}>
+                <span
+                  aria-hidden="true"
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: "24px",
+                    height: "24px",
+                    borderRadius: "50%",
+                    background: activeTagIndex === index ? "#008060" : "#1a1a1a",
+                    color: "#fff",
+                    font: "700 12px/1 -apple-system, sans-serif",
+                    flexShrink: 0,
+                  }}
+                >
+                  {index + 1}
+                </span>
                 <s-stack direction="block" gap="tight" style={{ flex: 1 }}>
                   <s-text fontWeight="bold">{tag.title}</s-text>
                   <s-text variant="bodyMd" tone="subdued">
                     @ {formatTimestamp(tag.timestamp)} · position ({tag.positionX}%, {tag.positionY}%)
                   </s-text>
                 </s-stack>
+
+                <s-button
+                  variant="tertiary"
+                  onClick={() => setTimestampToCurrentFrame(index)}
+                >
+                  Set to current frame
+                </s-button>
 
                 <s-button
                   variant="tertiary"
@@ -406,7 +543,7 @@ export default function VideoEditor() {
                     }
                   }}
                 >
-                  {editingTagIndex === index ? "Cancel" : "Edit"}
+                  {editingTagIndex === index ? "Cancel" : "Edit values"}
                 </s-button>
 
                 <s-button
