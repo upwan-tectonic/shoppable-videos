@@ -58,18 +58,56 @@
     function addToCart(variantId, btn) {
       btn.disabled = true;
       btn.textContent = 'Adding…';
+      // Ask Shopify to also re-render the theme's cart sections (drawer + bubble)
+      // so, when the shopper opens the drawer, it shows the item they just added
+      // instead of a stale snapshot. Discovered defensively — empty on themes that
+      // don't wrap the cart in an addressable section.
+      var sectionIds = cartSectionIds();
+      var body = { items: [{ id: parseInt(variantId, 10), quantity: 1 }] };
+      if (sectionIds.length) { body.sections = sectionIds; body.sections_url = window.location.pathname; }
       fetch('/cart/add.js', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: [{ id: parseInt(variantId, 10), quantity: 1 }] })
+        body: JSON.stringify(body)
       })
         .then(function (r) { if (!r.ok) throw new Error('add failed'); return r.json(); })
-        .then(function () {
+        .then(function (data) {
+          if (data && data.sections) applyCartSections(data.sections);
           refreshCart();
           btn.textContent = '✓ Added!';
           setTimeout(function () { btn.textContent = 'Add to cart'; btn.disabled = false; }, 1800);
         })
         .catch(function () { btn.textContent = 'Error'; btn.disabled = false; });
+    }
+
+    // Find the theme's cart-related sections (Shopify wraps each section in
+    // <div id="shopify-section-ID">). We return the IDs of any that contain a
+    // cart drawer / cart icon so the add-to-cart call can request fresh HTML.
+    function cartSectionIds() {
+      var ids = [];
+      var CART_SEL = 'cart-drawer, cart-drawer-component, cart-notification, #cart-icon-bubble, ' +
+        '[id*="cart-drawer" i], [class*="cart-drawer" i], [class*="cart-count" i], .cart-count-bubble';
+      document.querySelectorAll('[id^="shopify-section-"]').forEach(function (sec) {
+        if (sec.querySelector(CART_SEL)) {
+          var id = sec.id.replace('shopify-section-', '');
+          if (ids.indexOf(id) === -1) ids.push(id);
+        }
+      });
+      return ids;
+    }
+
+    // Replace the live section markup with the freshly-rendered HTML Shopify
+    // returned. Guarded so a theme whose structure differs can never throw.
+    function applyCartSections(sections) {
+      Object.keys(sections).forEach(function (id) {
+        try {
+          var live = document.getElementById('shopify-section-' + id);
+          if (!live || !sections[id]) return;
+          var parsed = new DOMParser().parseFromString(sections[id], 'text/html');
+          var fresh = parsed.getElementById('shopify-section-' + id);
+          live.innerHTML = fresh ? fresh.innerHTML : sections[id];
+        } catch (e) {}
+      });
     }
 
     // The item is added server-side immediately; notify the theme + show our own
@@ -94,6 +132,80 @@
         .catch(function () {});
     }
 
+    // Open the theme's cart drawer instantly if it has one; otherwise fall back
+    // to a normal navigation to the cart page. The store's theme is unknown, so we
+    // try increasingly generic strategies and stop at the first that opens it.
+    function openCart() {
+      // 1. Any cart-drawer-ish custom element / dialog — open it DIRECTLY (no click,
+      //    so nothing bubbles to the theme's "click outside → close" handler).
+      var drawer = document.querySelector(
+        'cart-drawer, cart-drawer-component, cart-notification, ' +
+        '[id*="cart-drawer" i], [class*="cart-drawer" i], dialog[id*="cart" i], dialog[class*="cart" i]'
+      );
+      if (drawer && directOpen(drawer)) return;
+
+      // 2. A header cart toggle the theme wires to its drawer. Try a non-bubbling
+      //    click first (fires element-bound handlers without reaching the document
+      //    close handler → no open-then-close flash), then a bubbling one for
+      //    themes that use event delegation.
+      var toggleSel = ['#cart-icon-bubble', '[data-cart-drawer-toggle]', '.js-drawer-open-cart',
+        'a[href="/cart"][aria-controls]', 'summary[aria-controls*="cart" i]', '.header__icon--cart',
+        '[aria-controls*="cart" i]', 'button[aria-label*="cart" i]', 'a[aria-label*="cart" i]',
+        '[on\\:click*="cart" i]'];
+      var toggle = null;
+      for (var i = 0; i < toggleSel.length && !toggle; i++) toggle = document.querySelector(toggleSel[i]);
+      if (!toggle) {
+        var links = document.querySelectorAll('a[href="/cart"], a[href$="/cart"], a[href*="/cart?"]');
+        for (var j = 0; j < links.length; j++) {
+          if (!links[j].hasAttribute('data-sv-viewcart') && !links[j].closest('[data-sv-item]')) { toggle = links[j]; break; }
+        }
+      }
+      if (toggle) {
+        toggle.dispatchEvent(new MouseEvent('click', { bubbles: false, cancelable: true, view: window }));
+        // If a direct open target now exists but is still closed, re-open it directly.
+        if (drawer && !isOpen(drawer)) directOpen(drawer);
+        // As a last resort for delegated handlers, a bubbling click after a tick.
+        if (!drawer) setTimeout(function () {
+          toggle.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+        }, 0);
+        return;
+      }
+
+      // 3. Broadcast common "open cart" events some themes listen for.
+      ['cart:open', 'drawer:open', 'cart-drawer:open'].forEach(function (name) {
+        document.dispatchEvent(new CustomEvent(name, { bubbles: true }));
+      });
+
+      // 4. Nothing drawer-like found — just go to the cart page.
+      if (!drawer) window.location.href = '/cart';
+    }
+
+    // Try every common way to open a drawer element without simulating a click.
+    function directOpen(el) {
+      try {
+        if (el.tagName === 'DIALOG' && typeof el.showModal === 'function') { el.showModal(); return true; }
+        if (typeof el.show === 'function') { el.show(); return isOpen(el); }
+        if (typeof el.open === 'function') { el.open(); return isOpen(el); }
+      } catch (e) {}
+      // Attribute/class-based drawers.
+      el.removeAttribute('hidden');
+      el.setAttribute('aria-hidden', 'false');
+      if ('open' in el && typeof el.open !== 'function') { try { el.open = true; } catch (e) {} }
+      ['active', 'is-open', 'open', 'is-active', 'drawer--active', 'cart-drawer--active', 'expanded'].forEach(function (c) { el.classList.add(c); });
+      document.body.classList.add('overflow-hidden');
+      return isOpen(el);
+    }
+
+    // Best-effort "is this element visibly open?" check.
+    function isOpen(el) {
+      if (!el) return false;
+      if (el.tagName === 'DIALOG') return el.open === true;
+      if (el.getAttribute('aria-hidden') === 'true' || el.hasAttribute('hidden')) return false;
+      var r = el.getBoundingClientRect();
+      var vis = getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
+      return vis && r.width > 0 && r.height > 0;
+    }
+
     function showToast(count) {
       var t = document.getElementById('sv-cart-toast');
       if (!t) {
@@ -102,7 +214,19 @@
         t.style.cssText = 'position:fixed;top:84px;left:50%;transform:translateX(-50%);background:#000;color:#fff;padding:12px 18px;border-radius:999px;font:14px/1.2 -apple-system,BlinkMacSystemFont,sans-serif;z-index:2147483600;box-shadow:0 8px 24px rgba(0,0,0,.35);opacity:0;transition:opacity .2s ease;';
         document.body.appendChild(t);
       }
-      t.innerHTML = '✓ Added · ' + count + ' in cart <a href="/cart" style="color:#fff;text-decoration:underline;font-weight:600;margin-left:8px;">View cart</a>';
+      t.innerHTML = '✓ Added · ' + count + ' in cart <a href="/cart" data-sv-viewcart style="color:#fff;text-decoration:underline;font-weight:600;margin-left:8px;">View cart</a>';
+      var link = t.querySelector('[data-sv-viewcart]');
+      if (link) link.addEventListener('click', function (e) {
+        // Keep the real /cart href for no-JS / middle-click, but upgrade a plain
+        // click to open the theme's cart drawer instantly.
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
+        e.preventDefault();
+        // Stop this click from bubbling to the theme's document-level
+        // "click outside → close drawer" handler, and open on the next tick so
+        // the drawer opens cleanly instead of flashing open-then-closed.
+        e.stopPropagation();
+        setTimeout(openCart, 0);
+      });
       requestAnimationFrame(function () { t.style.opacity = '1'; });
       clearTimeout(window.__svToast);
       window.__svToast = setTimeout(function () { t.style.opacity = '0'; }, 3500);
