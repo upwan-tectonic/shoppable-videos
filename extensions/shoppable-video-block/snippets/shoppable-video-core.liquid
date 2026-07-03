@@ -55,18 +55,17 @@
     window.__shoppableVideoInit = true;
 
     // ── Add to cart (shared) ─────────────────────────────────────────────────
-    // Add via the Cart AJAX API and request the theme's cart sections so the header
-    // count and drawer contents refresh. Critically, we update those sections the
-    // way the theme itself does — preserving the #cart-icon-bubble anchor and the
-    // <cart-drawer> element and swapping only their INNER html — so their click
-    // bindings (open drawer on icon tap) survive. Replacing the whole section was
-    // what broke the cart icon's first tap after an add.
+    // Standard, theme-safe pattern used by well-behaved Shopify apps: add via the
+    // Cart AJAX API, refresh the header cart count non-destructively, and let the
+    // shopper open the real cart (a server-rendered, always-correct view) via the
+    // toast's "View cart" link. We deliberately do NOT reach into the theme's private
+    // cart-drawer internals — that differs per theme and can't be synced reliably.
     function addToCart(variantId, btn) {
       btn.disabled = true;
       btn.textContent = 'Adding…';
-      var sectionIds = cartSectionIds();
+      var iconSection = cartIconSectionId();
       var body = { items: [{ id: parseInt(variantId, 10), quantity: 1 }] };
-      if (sectionIds.length) { body.sections = sectionIds; body.sections_url = window.location.pathname; }
+      if (iconSection) { body.sections = [iconSection]; body.sections_url = window.location.pathname; }
       fetch('/cart/add.js', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -74,7 +73,7 @@
       })
         .then(function (r) { if (!r.ok) throw new Error('add failed'); return r.json(); })
         .then(function (data) {
-          if (data && data.sections) applyCartSections(data.sections);
+          if (data && data.sections) updateCartIcon(data.sections);
           refreshCart();
           btn.textContent = '✓ Added!';
           setTimeout(function () { btn.textContent = 'Add to cart'; btn.disabled = false; }, 1800);
@@ -82,86 +81,42 @@
         .catch(function () { btn.textContent = 'Error'; btn.disabled = false; });
     }
 
-    // Section IDs (Shopify wraps each section in <div id="shopify-section-ID">) whose
-    // markup hosts the cart icon or drawer, so /cart/add.js re-renders them for us.
-    function cartSectionIds() {
-      var ids = [];
-      var CART_SEL = '#cart-icon-bubble, cart-drawer, cart-drawer-component';
-      document.querySelectorAll('[id^="shopify-section-"]').forEach(function (sec) {
-        if (sec.querySelector(CART_SEL)) {
-          var id = sec.id.replace('shopify-section-', '');
-          if (ids.indexOf(id) === -1) ids.push(id);
-        }
-      });
-      return ids;
+    // The section id (shopify-section-ID) that renders the header cart icon, so the
+    // add call can return fresh HTML for it — enough to show the count, incl. 0→1.
+    function cartIconSectionId() {
+      var sec = document.querySelector('[id^="shopify-section-"] #cart-icon-bubble');
+      if (sec) {
+        var wrap = sec.closest('[id^="shopify-section-"]');
+        if (wrap) return wrap.id.replace('shopify-section-', '');
+      }
+      return null;
     }
 
-    // Refresh cart UI from the freshly-rendered section HTML WITHOUT replacing the
-    // elements the theme has JS bound to. We keep the live #cart-icon-bubble anchor
-    // and <cart-drawer> element and only swap their inner HTML — so the count bubble
-    // updates (incl. 0→1) and the drawer shows the new item, while the theme's own
-    // "tap icon → open drawer" binding stays alive.
-    function applyCartSections(sections) {
+    // Refresh ONLY the header cart icon's inner HTML from the freshly-rendered
+    // section — preserving the #cart-icon-bubble element itself so the theme's own
+    // click binding (open drawer / go to cart) stays intact. This is what keeps the
+    // header count correct without breaking the theme's cart.
+    function updateCartIcon(sections) {
       Object.keys(sections).forEach(function (id) {
         try {
           if (!sections[id]) return;
           var parsed = new DOMParser().parseFromString(sections[id], 'text/html');
-          ['#cart-icon-bubble', 'cart-drawer', 'cart-drawer-component'].forEach(function (sel) {
-            var liveEl = document.querySelector(sel);
-            var freshEl = parsed.querySelector(sel);
-            if (!liveEl || !freshEl) return;
-            liveEl.innerHTML = freshEl.innerHTML;
-            // Also sync the element's own class on the drawer so the theme's empty/
-            // filled state flips (Dawn keeps an `is-empty` class on <cart-drawer> that
-            // otherwise hides the freshly-added items). Preserve open state if the
-            // drawer happens to be open during the swap.
-            if (sel !== '#cart-icon-bubble') {
-              var keptOpen = liveEl.classList.contains('active') || liveEl.classList.contains('animate');
-              liveEl.className = freshEl.className;
-              if (keptOpen) { liveEl.classList.add('active', 'animate'); }
-            }
-          });
+          var liveIcon = document.querySelector('#cart-icon-bubble');
+          var freshIcon = parsed.querySelector('#cart-icon-bubble');
+          if (liveIcon && freshIcon) liveIcon.innerHTML = freshIcon.innerHTML;
         } catch (e) {}
       });
     }
 
-    // The item is added server-side immediately; notify the theme + show our own
-    // toast (source of truth from /cart.js) since some themes (e.g. Horizon) don't
-    // expose cart sections to apps.
+    // Fetch the authoritative item count for the toast, and nudge the theme to
+    // update its own cart UI via the events common themes listen for.
     function refreshCart() {
       document.dispatchEvent(new CustomEvent('cart:refresh', { bubbles: true }));
       document.dispatchEvent(new CustomEvent('cart:updated', { bubbles: true }));
       fetch('/cart.js', { headers: { Accept: 'application/json' } })
         .then(function (r) { return r.json(); })
-        .then(function (cart) {
-          var n = cart.item_count;
-          document.querySelectorAll('.cart-count-bubble').forEach(function (b) {
-            var vis = b.querySelector('span[aria-hidden="true"]');
-            if (vis) vis.textContent = n; else if (b.children.length === 0) b.textContent = n;
-          });
-          ['[data-cart-count]', '#CartCount', '.cart-link__bubble', '.site-header__cart-count', '.header__cart-count', '.cart-count'].forEach(function (sel) {
-            document.querySelectorAll(sel).forEach(function (el) { if (el.children.length === 0) el.textContent = n; });
-          });
-          showToast(n);
-        })
-        .catch(function () {});
-    }
-
-    // Open the theme's cart drawer in place (for our own "View cart" toast link).
-    // The store uses a <cart-drawer> custom element whose header trigger is
-    // #cart-icon-bubble. We open it through the theme's own paths only.
-    function openCart() {
-      var drawer = document.querySelector('cart-drawer, cart-drawer-component');
-      if (drawer && typeof drawer.open === 'function') {
-        try { drawer.open(); return; } catch (e) {}
-      }
-      var icon = document.getElementById('cart-icon-bubble');
-      if (drawer && icon) { icon.click(); return; }
-      var dlg = document.querySelector('dialog[id*="cart" i], dialog[class*="cart" i]');
-      if (dlg && typeof dlg.showModal === 'function') {
-        try { dlg.showModal(); return; } catch (e) {}
-      }
-      window.location.href = '/cart';
+        .then(function (cart) { showToast(cart.item_count); })
+        .catch(function () { showToast(null); });
     }
 
     function showToast(count) {
@@ -172,16 +127,10 @@
         t.style.cssText = 'position:fixed;top:84px;left:50%;transform:translateX(-50%);background:#000;color:#fff;padding:12px 18px;border-radius:999px;font:14px/1.2 -apple-system,BlinkMacSystemFont,sans-serif;z-index:2147483600;box-shadow:0 8px 24px rgba(0,0,0,.35);opacity:0;transition:opacity .2s ease;';
         document.body.appendChild(t);
       }
-      t.innerHTML = '✓ Added · ' + count + ' in cart <a href="/cart" data-sv-viewcart style="color:#fff;text-decoration:underline;font-weight:600;margin-left:8px;">View cart</a>';
-      var link = t.querySelector('[data-sv-viewcart]');
-      if (link) link.addEventListener('click', function (e) {
-        // Keep the real /cart href for no-JS / middle-click; upgrade a plain click
-        // to open the cart drawer in place.
-        if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
-        e.preventDefault();
-        e.stopPropagation();
-        openCart();
-      });
+      var label = count == null ? '✓ Added to cart' : '✓ Added · ' + count + ' in cart';
+      // "View cart" is a plain link to the real, server-rendered cart — always
+      // accurate on every theme. No drawer manipulation.
+      t.innerHTML = label + ' <a href="/cart" style="color:#fff;text-decoration:underline;font-weight:600;margin-left:8px;">View cart</a>';
       requestAnimationFrame(function () { t.style.opacity = '1'; });
       clearTimeout(window.__svToast);
       window.__svToast = setTimeout(function () { t.style.opacity = '0'; }, 3500);
