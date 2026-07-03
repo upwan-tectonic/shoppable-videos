@@ -69,8 +69,9 @@ The app has two surfaces: the **embedded admin** (where a merchant manages video
 
 With `shopify app dev` running, press **`p`** in that terminal (or open the printed **Preview URL**). It opens the app **embedded inside Shopify admin** → **Shoppable Videos → Videos**.
 
-1. **Add Video** → paste a hosted MP4 URL, give it a title.
-   *(A verified portrait test clip: `https://videos.pexels.com/video-files/7667423/7667423-uhd_2732_1440_25fps.mp4`)*
+1. **Add Video** → give it a title, then either paste a hosted MP4 URL **or** click
+   **⬆ Upload video to Shopify** to host the file on Shopify (Files API).
+   *(A verified portrait test clip to paste: `https://videos.pexels.com/video-files/7667423/7667423-uhd_2732_1440_25fps.mp4`)*
 2. **Tag products** → *Search catalog…* → pick one or more products. Each tag gets a timestamp (when the hotspot shows) and an on-screen position.
 3. Set **Status → Live**, then **Save**. (Setting Live with zero tags is blocked with a toast.)
 4. Copy the **Handle** shown in the *Embed on storefront* panel — you'll need it for the single-video block.
@@ -251,17 +252,20 @@ Storefront Request
 
 ## Scopes & Permissions
 
-Only two scopes are requested — verified to be the complete set the app actually exercises:
+Four scopes are requested — verified to be the complete set the app actually exercises:
 
 | Scope | Why |
 |---|---|
 | `read_products` | Search the product catalog in the Resource Picker; read product data in the `products/*` webhooks. |
 | `write_metaobjects` | Create, update, and delete shoppable-video metaobject entries. |
+| `write_files` | Upload merchant videos to Shopify-hosted storage via the Files API (`stagedUploadsCreate` → `fileCreate`). |
+| `read_files` | Poll an uploaded file's status and read back its CDN URL until it's `READY`. |
 
 **Deliberately NOT requested (least privilege — verified, not assumed):**
-- **`write_metaobject_definitions`** — the metaobject *definition* is declared declaratively in `shopify.app.toml` and is read-only through the Admin API, so the app never mutates definitions at runtime. Confirmed that entry create/update/delete works with only the two scopes above.
-- **`read_files` / `write_files`** — video hosting is paste-a-hosted-URL, so the Files API is not used. See [Stack Deviations](#stack-deviations).
+- **`write_metaobject_definitions`** — the metaobject *definition* is declared declaratively in `shopify.app.toml` and is read-only through the Admin API, so the app never mutates definitions at runtime. Confirmed that entry create/update/delete works without it.
 - **`write_products`** — we never modify products, only read them.
+
+The `read_files`/`write_files` pair is the minimum needed for the optional "upload video to Shopify" flow; merchants who only paste a hosted URL never trigger the Files API, but the scopes are required for the upload path to exist.
 
 **Token choice: Offline tokens.** We use offline access tokens because webhook handlers (like `products/delete`) need to make Admin API calls without a merchant actively using the app. Online tokens expire with the session and can't service background webhook work.
 
@@ -309,7 +313,7 @@ The prescribed stack is used as-is:
 - Metaobjects for app data storage
 - Prisma/SQLite only for session storage (justified above)
 
-**One deliberate scope-down (documented, not silent):** video hosting is **paste-a-hosted-URL**, not upload-via-Files-API. The brief says to use Shopify-hosted storage for video "wherever possible" but also "don't over-build this — it isn't the point." Rather than ship a `stagedUploadsCreate` → `fileCreate` → poll-until-`READY` upload flow I couldn't fully verify end-to-end, I kept URL-paste and **dropped the `read_files`/`write_files` scopes entirely** — trading a nice-to-have for a clean least-privilege story. Adding Files upload is the first item in [What I'd Do With More Time](#what-id-do-with-more-time) and would only re-introduce those two scopes.
+**Video hosting supports both paste-a-URL and upload-to-Shopify.** A merchant can paste any hosted MP4 URL, or upload a file that's stored on Shopify via the Files API. The upload runs the standard handshake — `stagedUploadsCreate` for a signed target, a **direct browser-to-Shopify** upload of the bytes (they never pass through this app server), `fileCreate` to register it, then polling until `READY` to read back the CDN URL (see [`app/routes/api.upload.tsx`](app/routes/api.upload.tsx)). Uploaded videos register as a Shopify **File** so the storefront `<video>` gets a direct, immediately-playable CDN URL rather than waiting on adaptive transcoding.
 
 ### API version
 All surfaces (server, `shopify.app.toml` webhooks, theme extension) are pinned to Admin API **`2026-07`** (`ApiVersion.July26`) — the latest stable in the installed SDK.
@@ -318,7 +322,7 @@ All surfaces (server, `shopify.app.toml` webhooks, theme extension) are pinned t
 
 ## What I'd Do With More Time
 
-1. **Video upload via Files API**: Currently only supports pasting a hosted URL. Would add a file upload flow using Shopify's `stagedUploadsCreate` → `fileCreate` → poll-until-`READY` mutations (this would re-introduce the `read_files`/`write_files` scopes).
+1. **Adaptive video transcoding**: Uploads currently register as a Shopify **File** for a direct MP4 URL. Registering as **Video** media instead would give HLS/adaptive renditions (`sources`) for better mobile streaming, at the cost of a transcoding wait — worth a poster-frame + "processing" state.
 2. **Storefront product data without `all_products`**: `all_products[handle]` requires the product to be published to the Online Store channel and is handle-keyed. An App Proxy (or the Storefront API with the tag `productId`s) would remove that dependency and let the block resolve products by stable ID. The `products/update` webhook already keeps the handle fresh in the meantime.
 3. **Pagination**: The videos list currently fetches 50 videos. Would add cursor-based pagination for merchants with more content.
 4. **Video thumbnail generation**: Auto-generate a poster frame from the video for the list view.

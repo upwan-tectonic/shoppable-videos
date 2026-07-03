@@ -6,13 +6,14 @@ application_url = "https://example.com"
 embedded = true
 
 [access_scopes]
-# Least-privilege. Only two scopes are actually exercised:
-#   read_products    – catalog search in the editor + product reads in the products/* webhooks
+# Least-privilege. Scopes actually exercised:
+#   read_products     – catalog search in the editor + product reads in the products/* webhooks
 #   write_metaobjects – create/update/delete the shoppable-video entries
+#   write_files       – upload merchant videos to Shopify-hosted storage (Files API)
+#   read_files        – poll uploaded file status / read back the CDN URL
 # The metaobject *definition* is declared declaratively below (managed via app config, not the
-# Admin API), so no write_metaobject_definitions scope is needed. Video hosting is paste-a-URL
-# (no Files API), so read_files/write_files are intentionally omitted. See README §Scopes.
-scopes = "read_products,write_metaobjects"
+# Admin API), so no write_metaobject_definitions scope is needed. See README §Scopes.
+scopes = "read_products,write_metaobjects,read_files,write_files"
 
 # ─── Metaobject: Shoppable Video ─────────────────────────────────────────────
 # This is the core data entity. Each metaobject represents one shoppable video.

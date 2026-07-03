@@ -165,6 +165,83 @@ export default function VideoEditor() {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const dragIndex = useRef<number | null>(null);
 
+  // Video upload (Files API) state
+  const [uploading, setUploading] = useState(false);
+  const [uploadMsg, setUploadMsg] = useState("");
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Authenticated POST to our /api/upload resource route. App Bridge's session
+  // token authorizes the request; the route validates it via authenticate.admin.
+  const apiUpload = useCallback(
+    async (fields: Record<string, string>) => {
+      const token = await shopify.idToken();
+      const fd = new FormData();
+      Object.entries(fields).forEach(([k, v]) => fd.append(k, v));
+      const res = await fetch("/api/upload", {
+        method: "POST",
+        body: fd,
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      return res.json();
+    },
+    [shopify]
+  );
+
+  // Full upload handshake: staged target → direct upload → fileCreate → poll READY.
+  const handleUpload = useCallback(
+    async (file: File) => {
+      if (!file) return;
+      setUploading(true);
+      setUploadMsg("Preparing upload…");
+      try {
+        const staged = await apiUpload({
+          intent: "stagedUpload",
+          filename: file.name,
+          mimeType: file.type || "video/mp4",
+          fileSize: String(file.size),
+        });
+        if (staged.error || !staged.stagedTarget) {
+          throw new Error(staged.error || "Could not create an upload target.");
+        }
+
+        setUploadMsg("Uploading video…");
+        const form = new FormData();
+        (staged.stagedTarget.parameters || []).forEach((p: any) => form.append(p.name, p.value));
+        form.append("file", file);
+        const up = await fetch(staged.stagedTarget.url, { method: "POST", body: form });
+        if (!up.ok) throw new Error("Upload to Shopify storage failed.");
+
+        setUploadMsg("Processing…");
+        const created = await apiUpload({
+          intent: "createFile",
+          resourceUrl: staged.stagedTarget.resourceUrl,
+          filename: file.name,
+        });
+        if (created.error || !created.fileId) {
+          throw new Error(created.error || "Could not register the uploaded file.");
+        }
+
+        let url: string | null = null;
+        for (let i = 0; i < 40; i++) {
+          const st = await apiUpload({ intent: "fileStatus", fileId: created.fileId });
+          if (st.status === "READY" && st.url) { url = st.url; break; }
+          if (st.status === "FAILED") throw new Error("Shopify could not process this file.");
+          await new Promise((r) => setTimeout(r, 1500));
+        }
+        if (!url) throw new Error("Timed out waiting for the video to be ready.");
+
+        setVideoUrl(url);
+        shopify.toast.show("Video uploaded to Shopify");
+      } catch (e: any) {
+        shopify.toast.show(e?.message || "Upload failed");
+      } finally {
+        setUploading(false);
+        setUploadMsg("");
+      }
+    },
+    [apiUpload, shopify]
+  );
+
   // Drag a numbered marker to set its product's on-screen position (0–100 %).
   const startDrag = useCallback(
     (index: number) => (e: React.PointerEvent) => {
@@ -377,8 +454,35 @@ export default function VideoEditor() {
             value={videoUrl}
             onInput={(e: any) => setVideoUrl(e.target.value)}
             placeholder="https://cdn.shopify.com/videos/… or any hosted URL"
-            helpText="Paste a direct link to an MP4 video file"
+            helpText="Paste a direct link to an MP4 — or upload one below to host it on Shopify"
           />
+
+          {/* Upload to Shopify-hosted storage (Files API) */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="video/*"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleUpload(f);
+              e.target.value = "";
+            }}
+          />
+          <s-stack direction="inline" gap="base" align="center">
+            <s-button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              {...(uploading ? { loading: true } : {})}
+            >
+              ⬆ Upload video to Shopify
+            </s-button>
+            {uploadMsg && (
+              <s-text variant="bodySm" tone="subdued">
+                {uploadMsg}
+              </s-text>
+            )}
+          </s-stack>
 
           {videoUrl && (
             <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
