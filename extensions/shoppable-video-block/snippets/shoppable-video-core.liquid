@@ -55,13 +55,15 @@
     window.__shoppableVideoInit = true;
 
     // ── Add to cart (shared) ─────────────────────────────────────────────────
+    // Add via the Cart AJAX API and request the theme's cart sections so the header
+    // count and drawer contents refresh. Critically, we update those sections the
+    // way the theme itself does — preserving the #cart-icon-bubble anchor and the
+    // <cart-drawer> element and swapping only their INNER html — so their click
+    // bindings (open drawer on icon tap) survive. Replacing the whole section was
+    // what broke the cart icon's first tap after an add.
     function addToCart(variantId, btn) {
       btn.disabled = true;
       btn.textContent = 'Adding…';
-      // Ask Shopify to also re-render the theme's cart sections (drawer + bubble)
-      // so, when the shopper opens the drawer, it shows the item they just added
-      // instead of a stale snapshot. Discovered defensively — empty on themes that
-      // don't wrap the cart in an addressable section.
       var sectionIds = cartSectionIds();
       var body = { items: [{ id: parseInt(variantId, 10), quantity: 1 }] };
       if (sectionIds.length) { body.sections = sectionIds; body.sections_url = window.location.pathname; }
@@ -80,13 +82,11 @@
         .catch(function () { btn.textContent = 'Error'; btn.disabled = false; });
     }
 
-    // Find the theme's cart-related sections (Shopify wraps each section in
-    // <div id="shopify-section-ID">). We return the IDs of any that contain a
-    // cart drawer / cart icon so the add-to-cart call can request fresh HTML.
+    // Section IDs (Shopify wraps each section in <div id="shopify-section-ID">) whose
+    // markup hosts the cart icon or drawer, so /cart/add.js re-renders them for us.
     function cartSectionIds() {
       var ids = [];
-      var CART_SEL = 'cart-drawer, cart-drawer-component, cart-notification, #cart-icon-bubble, ' +
-        '[id*="cart-drawer" i], [class*="cart-drawer" i], [class*="cart-count" i], .cart-count-bubble';
+      var CART_SEL = '#cart-icon-bubble, cart-drawer, cart-drawer-component';
       document.querySelectorAll('[id^="shopify-section-"]').forEach(function (sec) {
         if (sec.querySelector(CART_SEL)) {
           var id = sec.id.replace('shopify-section-', '');
@@ -96,16 +96,31 @@
       return ids;
     }
 
-    // Replace the live section markup with the freshly-rendered HTML Shopify
-    // returned. Guarded so a theme whose structure differs can never throw.
+    // Refresh cart UI from the freshly-rendered section HTML WITHOUT replacing the
+    // elements the theme has JS bound to. We keep the live #cart-icon-bubble anchor
+    // and <cart-drawer> element and only swap their inner HTML — so the count bubble
+    // updates (incl. 0→1) and the drawer shows the new item, while the theme's own
+    // "tap icon → open drawer" binding stays alive.
     function applyCartSections(sections) {
       Object.keys(sections).forEach(function (id) {
         try {
-          var live = document.getElementById('shopify-section-' + id);
-          if (!live || !sections[id]) return;
+          if (!sections[id]) return;
           var parsed = new DOMParser().parseFromString(sections[id], 'text/html');
-          var fresh = parsed.getElementById('shopify-section-' + id);
-          live.innerHTML = fresh ? fresh.innerHTML : sections[id];
+          ['#cart-icon-bubble', 'cart-drawer', 'cart-drawer-component'].forEach(function (sel) {
+            var liveEl = document.querySelector(sel);
+            var freshEl = parsed.querySelector(sel);
+            if (!liveEl || !freshEl) return;
+            liveEl.innerHTML = freshEl.innerHTML;
+            // Also sync the element's own class on the drawer so the theme's empty/
+            // filled state flips (Dawn keeps an `is-empty` class on <cart-drawer> that
+            // otherwise hides the freshly-added items). Preserve open state if the
+            // drawer happens to be open during the swap.
+            if (sel !== '#cart-icon-bubble') {
+              var keptOpen = liveEl.classList.contains('active') || liveEl.classList.contains('animate');
+              liveEl.className = freshEl.className;
+              if (keptOpen) { liveEl.classList.add('active', 'animate'); }
+            }
+          });
         } catch (e) {}
       });
     }
@@ -132,30 +147,20 @@
         .catch(function () {});
     }
 
-    // Open the theme's cart drawer in place. The store uses a <cart-drawer> custom
-    // element (Dawn/Horizon family) whose header trigger is #cart-icon-bubble.
+    // Open the theme's cart drawer in place (for our own "View cart" toast link).
+    // The store uses a <cart-drawer> custom element whose header trigger is
+    // #cart-icon-bubble. We open it through the theme's own paths only.
     function openCart() {
       var drawer = document.querySelector('cart-drawer, cart-drawer-component');
-
-      // 1. Call the drawer component's own open() with no argument. Passing no
-      //    "triggered by" element skips the theme's focus-into-view step, which is
-      //    what was yanking the video feed back to the first clip.
       if (drawer && typeof drawer.open === 'function') {
         try { drawer.open(); return; } catch (e) {}
       }
-
-      // 2. Fallback: click the header cart icon, which the theme binds to open the
-      //    drawer (and preventDefaults its own /cart navigation).
       var icon = document.getElementById('cart-icon-bubble');
       if (drawer && icon) { icon.click(); return; }
-
-      // 3. A <dialog>-based cart drawer.
       var dlg = document.querySelector('dialog[id*="cart" i], dialog[class*="cart" i]');
       if (dlg && typeof dlg.showModal === 'function') {
         try { dlg.showModal(); return; } catch (e) {}
       }
-
-      // 4. No drawer on this theme → go to the cart page.
       window.location.href = '/cart';
     }
 
