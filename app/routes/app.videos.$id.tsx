@@ -8,17 +8,11 @@ import { useLoaderData, useNavigate, useFetcher, useParams } from "react-router"
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-
-// ─── Types ───────────────────────────────────────────────────────────────────
-interface ProductTag {
-  productId: string;
-  productHandle: string;
-  title: string;
-  imageUrl?: string;
-  timestamp: number;  // seconds into the video
-  positionX: number;  // 0-100 percentage
-  positionY: number;  // 0-100 percentage
-}
+import {
+  slugify,
+  filterNewProducts,
+  type ProductTag,
+} from "../lib/product-tags";
 
 // ─── Loader: Fetch video by handle (or empty for "new") ─────────────────────
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
@@ -104,13 +98,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   }
 
   // Generate a URL-safe handle from the title
-  const handle =
-    (formData.get("handle") as string) ||
-    title
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/(^-|-$)/g, "")
-      .substring(0, 100);
+  const handle = (formData.get("handle") as string) || slugify(title);
 
   const fields = [
     { key: "title", value: title },
@@ -250,20 +238,17 @@ export default function VideoEditor() {
       });
 
       if (selected && selected.length > 0) {
-        const newTags: ProductTag[] = selected
-          .filter(
-            (product: any) =>
-              !tags.some((t) => t.productId === product.id)
-          )
-          .map((product: any) => ({
-            productId: product.id,
-            productHandle: product.handle,
-            title: product.title,
-            imageUrl: product.images?.[0]?.originalSrc || "",
-            timestamp: 0,
-            positionX: 50,
-            positionY: 50,
-          }));
+        const candidates: ProductTag[] = selected.map((product: any) => ({
+          productId: product.id,
+          productHandle: product.handle,
+          title: product.title,
+          imageUrl: product.images?.[0]?.originalSrc || "",
+          timestamp: 0,
+          positionX: 50,
+          positionY: 50,
+        }));
+        // Dedupe against already-tagged products (shared, unit-tested rule).
+        const newTags = filterNewProducts(tags, candidates);
 
         setTags((prev) => {
           const next = [...prev, ...newTags];

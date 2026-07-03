@@ -1,5 +1,6 @@
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
+import { healTagsForProduct, type ProductTag } from "../lib/product-tags";
 
 /**
  * Webhook: products/update
@@ -55,23 +56,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       if (!Array.isArray(tags) || tags.length === 0) continue;
 
-      let changed = false;
-      const updatedTags = tags.map((tag: any) => {
-        if (tag.productId !== productId) return tag;
-
-        const next = { ...tag };
-        if (newHandle && tag.productHandle !== newHandle) {
-          next.productHandle = newHandle;
-          changed = true;
-        }
-        if (newTitle && tag.title !== newTitle) {
-          next.title = newTitle;
-          changed = true;
-        }
-        return next;
+      // Re-sync the denormalized handle/title (pure logic lives in ../lib so it's
+      // unit-tested). `changed` keeps this idempotent — we only write on a real diff.
+      const { tags: updatedTags, changed } = healTagsForProduct(tags as ProductTag[], {
+        productId,
+        handle: newHandle,
+        title: newTitle,
       });
 
-      // Only write back when something actually changed → idempotent, low churn.
       if (changed) {
         await admin.graphql(
           `#graphql

@@ -17,6 +17,8 @@
     "prisma": "prisma",
     "graphql-codegen": "graphql-codegen",
     "vite": "vite",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "typecheck": "react-router typegen && tsc --noEmit"
   },
   "type": "module",
@@ -57,7 +59,8 @@
     "graphql-config": "^5.1.1",
     "prettier": "^3.6.2",
     "typescript": "^5.9.3",
-    "vite": "^6.3.6"
+    "vite": "^6.3.6",
+    "vitest": "^2.1.9"
   },
   "workspaces": [
     "extensions/*"

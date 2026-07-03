@@ -257,6 +257,8 @@
         var priceEl = card.querySelector('[data-sv-price]');
         var atc = card.querySelector('.sv-card-atc');
 
+        // Mirrors matchVariant() in app/lib/variants.ts (unit-tested there; Liquid
+        // can't import TS). Keep the two in sync if the matching rule changes.
         function currentVariant() {
           if (!selects.length) return variants[0];
           var chosen = selects.map(function (s) { return s.value; });
