@@ -132,78 +132,31 @@
         .catch(function () {});
     }
 
-    // Open the theme's cart drawer instantly if it has one; otherwise fall back
-    // to a normal navigation to the cart page. The store's theme is unknown, so we
-    // try increasingly generic strategies and stop at the first that opens it.
+    // Open the theme's cart drawer in place. The store uses a <cart-drawer> custom
+    // element (Dawn/Horizon family) whose header trigger is #cart-icon-bubble.
     function openCart() {
-      // 1. Any cart-drawer-ish custom element / dialog — open it DIRECTLY (no click,
-      //    so nothing bubbles to the theme's "click outside → close" handler).
-      var drawer = document.querySelector(
-        'cart-drawer, cart-drawer-component, cart-notification, ' +
-        '[id*="cart-drawer" i], [class*="cart-drawer" i], dialog[id*="cart" i], dialog[class*="cart" i]'
-      );
-      if (drawer && directOpen(drawer)) return;
+      var drawer = document.querySelector('cart-drawer, cart-drawer-component');
 
-      // 2. A header cart toggle the theme wires to its drawer. Try a non-bubbling
-      //    click first (fires element-bound handlers without reaching the document
-      //    close handler → no open-then-close flash), then a bubbling one for
-      //    themes that use event delegation.
-      var toggleSel = ['#cart-icon-bubble', '[data-cart-drawer-toggle]', '.js-drawer-open-cart',
-        'a[href="/cart"][aria-controls]', 'summary[aria-controls*="cart" i]', '.header__icon--cart',
-        '[aria-controls*="cart" i]', 'button[aria-label*="cart" i]', 'a[aria-label*="cart" i]',
-        '[on\\:click*="cart" i]'];
-      var toggle = null;
-      for (var i = 0; i < toggleSel.length && !toggle; i++) toggle = document.querySelector(toggleSel[i]);
-      if (!toggle) {
-        var links = document.querySelectorAll('a[href="/cart"], a[href$="/cart"], a[href*="/cart?"]');
-        for (var j = 0; j < links.length; j++) {
-          if (!links[j].hasAttribute('data-sv-viewcart') && !links[j].closest('[data-sv-item]')) { toggle = links[j]; break; }
-        }
-      }
-      if (toggle) {
-        toggle.dispatchEvent(new MouseEvent('click', { bubbles: false, cancelable: true, view: window }));
-        // If a direct open target now exists but is still closed, re-open it directly.
-        if (drawer && !isOpen(drawer)) directOpen(drawer);
-        // As a last resort for delegated handlers, a bubbling click after a tick.
-        if (!drawer) setTimeout(function () {
-          toggle.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-        }, 0);
-        return;
+      // 1. Call the drawer component's own open() with no argument. Passing no
+      //    "triggered by" element skips the theme's focus-into-view step, which is
+      //    what was yanking the video feed back to the first clip.
+      if (drawer && typeof drawer.open === 'function') {
+        try { drawer.open(); return; } catch (e) {}
       }
 
-      // 3. Broadcast common "open cart" events some themes listen for.
-      ['cart:open', 'drawer:open', 'cart-drawer:open'].forEach(function (name) {
-        document.dispatchEvent(new CustomEvent(name, { bubbles: true }));
-      });
+      // 2. Fallback: click the header cart icon, which the theme binds to open the
+      //    drawer (and preventDefaults its own /cart navigation).
+      var icon = document.getElementById('cart-icon-bubble');
+      if (drawer && icon) { icon.click(); return; }
 
-      // 4. Nothing drawer-like found — just go to the cart page.
-      if (!drawer) window.location.href = '/cart';
-    }
+      // 3. A <dialog>-based cart drawer.
+      var dlg = document.querySelector('dialog[id*="cart" i], dialog[class*="cart" i]');
+      if (dlg && typeof dlg.showModal === 'function') {
+        try { dlg.showModal(); return; } catch (e) {}
+      }
 
-    // Try every common way to open a drawer element without simulating a click.
-    function directOpen(el) {
-      try {
-        if (el.tagName === 'DIALOG' && typeof el.showModal === 'function') { el.showModal(); return true; }
-        if (typeof el.show === 'function') { el.show(); return isOpen(el); }
-        if (typeof el.open === 'function') { el.open(); return isOpen(el); }
-      } catch (e) {}
-      // Attribute/class-based drawers.
-      el.removeAttribute('hidden');
-      el.setAttribute('aria-hidden', 'false');
-      if ('open' in el && typeof el.open !== 'function') { try { el.open = true; } catch (e) {} }
-      ['active', 'is-open', 'open', 'is-active', 'drawer--active', 'cart-drawer--active', 'expanded'].forEach(function (c) { el.classList.add(c); });
-      document.body.classList.add('overflow-hidden');
-      return isOpen(el);
-    }
-
-    // Best-effort "is this element visibly open?" check.
-    function isOpen(el) {
-      if (!el) return false;
-      if (el.tagName === 'DIALOG') return el.open === true;
-      if (el.getAttribute('aria-hidden') === 'true' || el.hasAttribute('hidden')) return false;
-      var r = el.getBoundingClientRect();
-      var vis = getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
-      return vis && r.width > 0 && r.height > 0;
+      // 4. No drawer on this theme → go to the cart page.
+      window.location.href = '/cart';
     }
 
     function showToast(count) {
@@ -217,15 +170,12 @@
       t.innerHTML = '✓ Added · ' + count + ' in cart <a href="/cart" data-sv-viewcart style="color:#fff;text-decoration:underline;font-weight:600;margin-left:8px;">View cart</a>';
       var link = t.querySelector('[data-sv-viewcart]');
       if (link) link.addEventListener('click', function (e) {
-        // Keep the real /cart href for no-JS / middle-click, but upgrade a plain
-        // click to open the theme's cart drawer instantly.
+        // Keep the real /cart href for no-JS / middle-click; upgrade a plain click
+        // to open the cart drawer in place.
         if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
         e.preventDefault();
-        // Stop this click from bubbling to the theme's document-level
-        // "click outside → close drawer" handler, and open on the next tick so
-        // the drawer opens cleanly instead of flashing open-then-closed.
         e.stopPropagation();
-        setTimeout(openCart, 0);
+        openCart();
       });
       requestAnimationFrame(function () { t.style.opacity = '1'; });
       clearTimeout(window.__svToast);
